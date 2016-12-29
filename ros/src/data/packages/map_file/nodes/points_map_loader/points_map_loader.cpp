@@ -31,6 +31,12 @@
 #include <condition_variable>
 #include <queue>
 #include <thread>
+#include <vector>
+#include <map>
+#include <set>
+#include <queue>
+#include <mutex>
+#include <unistd.h>
 
 #include <geometry_msgs/PoseWithCovarianceStamped.h>
 #include <pcl_conversions/pcl_conversions.h>
@@ -42,6 +48,57 @@
 #include <map_file/get_file.h>
 
 namespace {
+
+template <typename T>
+class Queue
+{
+ public:
+
+  T pop()
+  {
+    std::unique_lock<std::mutex> mlock(mutex_);
+    while (queue_.empty())
+    {
+      cond_.wait(mlock);
+    }
+    auto item = queue_.front();
+    queue_.pop();
+    return item;
+  }
+
+  void pop(T& item)
+  {
+    std::unique_lock<std::mutex> mlock(mutex_);
+    while (queue_.empty())
+    {
+      cond_.wait(mlock);
+    }
+    item = queue_.front();
+    queue_.pop();
+  }
+
+  void push(const T& item)
+  {
+    std::unique_lock<std::mutex> mlock(mutex_);
+    queue_.push(item);
+    mlock.unlock();
+    cond_.notify_one();
+  }
+
+  void push(T&& item)
+  {
+    std::unique_lock<std::mutex> mlock(mutex_);
+    queue_.push(std::move(item));
+    mlock.unlock();
+    cond_.notify_one();
+  }
+
+ private:
+  std::queue<T> queue_;
+  std::mutex mutex_;
+  std::condition_variable cond_;
+};
+
 
 class RequestQueue {
 private:
@@ -140,6 +197,14 @@ std::vector<std::string> cached_arealist_paths;
 
 GetFile gf;
 RequestQueue request_queue;
+
+std::mutex current_path_mtx;
+std::set<std::string> current_paths;
+Queue<std::string> new_pcd_paths, old_pcd_paths;
+Queue<std::set<std::string>> pcd_paths_queue;
+std::map<std::string, sensor_msgs::PointCloud2> pcd_map;
+sensor_msgs::PointCloud2 current_pcd;
+
 
 Tbl read_csv(const std::string& path)
 {
@@ -312,10 +377,15 @@ void download_map()
 
 sensor_msgs::PointCloud2 create_pcd(const geometry_msgs::Point& p)
 {
+	ROS_ERROR_STREAM("Points Map Loader: Create PCD " << p.x << " " << p.y);
 	sensor_msgs::PointCloud2 pcd, part;
 	std::unique_lock<std::mutex> lock(downloaded_areas_mtx);
 	for (const Area& area : downloaded_areas) {
+		//ROS_ERROR_STREAM("Points Map Loader: Create PCD " << area.x_min << " " <<
+		//					area.x_max << " " << area.y_min << " " << area.y_max << " " <<
+		//				p.x << " " << p.y << " " << margin);
 		if (is_in_area(p.x, p.y, area, margin)) {
+			ROS_ERROR_STREAM("Points Map Loader: Create PCD " << area.path.c_str() << " " << pcd.width);
 			if (pcd.width == 0)
 				pcl::io::loadPCDFile(area.path.c_str(), pcd);
 			else {
@@ -328,6 +398,126 @@ sensor_msgs::PointCloud2 create_pcd(const geometry_msgs::Point& p)
 	}
 
 	return pcd;
+}
+
+sensor_msgs::PointCloud2 create_pcd(const geometry_msgs::Point& p, bool async)
+{
+	ROS_ERROR_STREAM("Points Map Loader: Create PCD " << async << "x = " << p.x << " y = " << p.y);
+	clock_t start = clock();
+	sensor_msgs::PointCloud2 pcd, part;
+	std::set<std::string> paths;
+
+
+
+	for (const Area& area : downloaded_areas) {
+		if (is_in_area(p.x, p.y, area, margin)) {
+			//ROS_ERROR_STREAM("Points Map Loader: Create PCD Paths " << area.path);
+			paths.insert(area.path);
+		}
+	}
+	if (async == false) {
+		for (const std::string& path: paths) {
+			if (pcd.width == 0){
+				pcl::io::loadPCDFile(path.c_str(), pcd);
+				pcd_map[path] = pcd;
+			} else {
+				pcl::io::loadPCDFile(path.c_str(), part);
+				pcd.width += part.width;
+				pcd.row_step += part.row_step;
+				pcd.data.insert(pcd.data.end(), part.data.begin(), part.data.end());
+				pcd_map[path] = part;
+			}
+		}
+
+	} else {
+		if (paths.size() > 0) {
+			std::vector<std::string> diff;
+			std::set_difference(paths.begin(), paths.end(), current_paths.begin(),
+								current_paths.end(),
+								std::inserter(diff, diff.begin()));
+			for(const std::string& path : diff) {
+				new_pcd_paths.push(path);
+			}
+			diff.clear();
+			std::set_difference(current_paths.begin(), current_paths.end(), paths.begin(),
+								paths.end(),
+								std::inserter(diff, diff.begin()));
+			for(const std::string& path : diff) {
+				old_pcd_paths.push(path);
+			}
+		}
+	}
+	if (paths.size() > 0) {
+		pcd_paths_queue.push(paths);
+		current_paths = paths;
+	}
+
+
+	//ROS_ERROR_STREAM("Points Map Loader: Create PCD End" << (float)(clock() - start)/CLOCKS_PER_SEC);
+	return pcd;
+}
+
+
+void pcd_builder(ros::Publisher pcd_pub, ros::Publisher stat_pub) {
+	std::set<std::string> old_paths;
+	std_msgs::Bool stat_msg;
+	bool ready = false;
+	while (true) {
+		auto paths = pcd_paths_queue.pop();
+		if (old_paths == paths && ready) {
+			continue;
+		}
+		sensor_msgs::PointCloud2 pcd, part;
+		std::unique_lock<std::mutex> lock(current_path_mtx);
+		for (const std::string& path : paths) {
+			if (pcd.width == 0) {
+				pcd = pcd_map[path];
+				ready = pcd.width > 0 ? true : false;
+			} else {
+				part = pcd_map[path];
+				ready = part.width > 0 ? true : false;
+				pcd.width += part.width;
+				pcd.row_step += part.row_step;
+				pcd.data.insert(pcd.data.end(), part.data.begin(), part.data.end());
+			}
+		}
+		if (ready) {
+			ROS_ERROR_STREAM("Points Map Loader: Got all PCDs ");
+			current_pcd = pcd;
+		}
+		if (pcd.width != 0) {
+			ROS_ERROR_STREAM("Publishing ");
+			pcd.header.frame_id = "map";
+			pcd_pub.publish(pcd);
+			stat_msg.data = true;
+			stat_pub.publish(stat_msg);
+		}
+		old_paths = paths;
+	}
+}
+
+void pcd_loader() {
+	while (true) {
+		std::string path = new_pcd_paths.pop();
+		sensor_msgs::PointCloud2 pcd;
+		ROS_ERROR_STREAM("Points Map Loader: Load PCD " << path.c_str());
+		if (pcl::io::loadPCDFile(path.c_str(), pcd) == -1) {
+			std::cerr << "load failed " << path << std::endl;
+		}
+		std::unique_lock<std::mutex> lock(current_path_mtx);
+		pcd_map[path] = pcd;
+		ROS_ERROR_STREAM("Points Map Loader: Loaded PCD " << path.c_str());
+	}
+}
+
+void pcd_remover() {
+	while (true) {
+		std::string path = old_pcd_paths.pop();
+		usleep(100*1000);
+		ROS_ERROR_STREAM("Points Map Loader: Delete PCD " << path.c_str());
+		std::unique_lock<std::mutex> lock(current_path_mtx);
+		pcd_map.erase(path);
+	}
 }
 
 sensor_msgs::PointCloud2 create_pcd(const std::vector<std::string>& pcd_paths, int* ret_err = NULL)
@@ -350,6 +540,7 @@ sensor_msgs::PointCloud2 create_pcd(const std::vector<std::string>& pcd_paths, i
 			pcd.data.insert(pcd.data.end(), part.data.begin(), part.data.end());
 		}
 		std::cerr << "load " << path << std::endl;
+		std::cerr << "load " << pcd.width << std::endl;
 		if (!ros::ok()) break;
 	}
 
@@ -361,6 +552,8 @@ void publish_pcd(sensor_msgs::PointCloud2 pcd, const int* errp = NULL)
 	if (pcd.width != 0) {
 		pcd.header.frame_id = "map";
 		pcd_pub.publish(pcd);
+
+		std::cerr << "Published" << std::endl;
 
 		if (errp == NULL || *errp == 0) {
 			stat_msg.data = true;
@@ -381,7 +574,7 @@ void publish_gnss_pcd(const geometry_msgs::PoseStamped& msg)
 	if (can_download)
 		request_queue.enqueue(msg.pose.position);
 
-	publish_pcd(create_pcd(msg.pose.position));
+	publish_pcd(create_pcd(msg.pose.position, true));
 }
 
 void publish_current_pcd(const geometry_msgs::PoseStamped& msg)
@@ -394,7 +587,7 @@ void publish_current_pcd(const geometry_msgs::PoseStamped& msg)
 	if (can_download)
 		request_queue.enqueue(msg.pose.position);
 
-	publish_pcd(create_pcd(msg.pose.position));
+	publish_pcd(create_pcd(msg.pose.position, true));
 }
 
 void publish_dragged_pcd(const geometry_msgs::PoseWithCovarianceStamped& msg)
@@ -416,7 +609,8 @@ void publish_dragged_pcd(const geometry_msgs::PoseWithCovarianceStamped& msg)
 	if (can_download)
 		request_queue.enqueue(p);
 
-	publish_pcd(create_pcd(p));
+	create_pcd(p, false);
+	//publish_pcd(create_pcd(p, false));
 }
 
 void request_lookahead_download(const waypoint_follower::LaneArray& msg)
@@ -459,6 +653,32 @@ void print_usage()
 
 } // namespace
 
+
+void add_dir(const std::string& path, std::vector<std::string>& paths)
+{
+	std::string cmd = "find " + path + " -name '*.pcd' | sort";
+	FILE *fp = popen(cmd.c_str(), "r");
+	char line[ PATH_MAX ];
+
+	while (fgets(line, sizeof(line), fp)) {
+		std::string buf(line);
+		buf.erase(--buf.end()); // cut tail '\n'
+		paths.push_back(buf);
+	}
+	pclose(fp);
+}
+
+int is_dir(const std::string& path)
+{
+	struct stat buf;
+	if (stat(path.c_str(), &buf) != 0) {
+		std::cerr << "not found " << path << std::endl;
+		exit(1);
+	}
+	return S_ISDIR(buf.st_mode);
+}
+
+
 int main(int argc, char **argv)
 {
 	ros::init(argc, argv, "points_map_loader");
@@ -492,10 +712,15 @@ int main(int argc, char **argv)
 	std::vector<std::string> pcd_paths;
 	if (margin < 0) {
 		can_download = false;
-		for (int i = 2; i < argc; ++i) {
-			std::string path(argv[i]);
-			pcd_paths.push_back(path);
+		if (is_dir(argv[2])) {
+			add_dir(argv[2], pcd_paths);
+		} else {
+			for (int i = 2; i < argc; ++i) {
+				std::string path(argv[i]);
+				pcd_paths.push_back(path);
+			}
 		}
+
 	} else {
 		std::string mode(argv[2]);
 		if (mode == "download") {
@@ -512,10 +737,15 @@ int main(int argc, char **argv)
 		} else {
 			can_download = false;
 			arealist_path += argv[2];
-			for (int i = 3; i < argc; ++i) {
-				std::string path(argv[i]);
-				pcd_paths.push_back(path);
+			if (is_dir(argv[3])) {
+				add_dir(argv[3], pcd_paths);
+			} else {
+				for (int i = 3; i < argc; ++i) {
+					std::string path(argv[i]);
+					pcd_paths.push_back(path);
+				}
 			}
+
 		}
 	}
 
@@ -555,6 +785,25 @@ int main(int argc, char **argv)
 					if (path == area.path)
 						cache_arealist(area, downloaded_areas);
 				}
+			}
+			try {
+				std::thread loader(pcd_loader);
+				loader.detach();
+			} catch (std::exception &ex) {
+				ROS_ERROR_STREAM("failed to create thread from " << ex.what());
+			}
+
+			try {
+				std::thread remover(pcd_remover);
+				remover.detach();
+			} catch (std::exception &ex) {
+				ROS_ERROR_STREAM("failed to create thread from " << ex.what());
+			}
+			try {
+				std::thread builder(pcd_builder, pcd_pub, stat_pub);
+				builder.detach();
+			} catch (std::exception &ex) {
+				ROS_ERROR_STREAM("failed to create thread from " << ex.what());
 			}
 		}
 
