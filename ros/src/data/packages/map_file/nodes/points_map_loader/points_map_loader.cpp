@@ -609,8 +609,7 @@ void publish_dragged_pcd(const geometry_msgs::PoseWithCovarianceStamped& msg)
 	if (can_download)
 		request_queue.enqueue(p);
 
-	create_pcd(p, false);
-	//publish_pcd(create_pcd(p, false));
+    publish_pcd(create_pcd(p, false));
 }
 
 void request_lookahead_download(const waypoint_follower::LaneArray& msg)
