@@ -217,31 +217,6 @@ void getMatricesFromFile(ros::NodeHandle nh, sensor_msgs::CameraInfo &camerainfo
 	cv::Mat  distCoeff;
 	cv::Size imageSize;
 	std::string filename;
-
-	if (nh.getParam("calibrationfile", filename) && filename!="")
-	{
-		ROS_INFO("Trying to parse calibrationfile :");
-		ROS_INFO("> %s", filename.c_str());
-	}
-	else
-	{
-		ROS_INFO("No calibrationfile param was received");
-		return;
-	}
-
-	cv::FileStorage fs(filename, cv::FileStorage::READ);
-	if (!fs.isOpened())
-	{
-		ROS_INFO("Cannot open %s", filename.c_str());;
-		return;
-	}
-	else
-	{
-		fs["CameraMat"] >> cameraMat;
-		fs["DistCoeff"] >> distCoeff;
-		fs["ImageSize"] >> imageSize;
-	}
-	parseCameraInfo(cameraMat, distCoeff, imageSize, camerainfo_msg);
 }
 
 int main(int argc, char **argv)
@@ -268,14 +243,7 @@ int main(int argc, char **argv)
 		ROS_INFO("No param received, defaulting to %.2f", fps);
 	}
 
-	///////calibration data
-	sensor_msgs::CameraInfo camerainfo_msg;
-	getMatricesFromFile(private_nh, camerainfo_msg);
-
 	ros::Publisher pub[camera_num];
-	ros::Publisher camera_info_pub;
-
-	camera_info_pub = n.advertise<sensor_msgs::CameraInfo>("/camera/camera_info", 1, true);
 
 	for (int i = 0; i < camera_num; i++) {
 	  std::string topic(std::string("image_raw"));
