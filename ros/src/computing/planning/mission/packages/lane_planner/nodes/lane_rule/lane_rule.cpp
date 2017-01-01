@@ -294,6 +294,7 @@ bool is_fine_vmap(const lane_planner::vmap::VectorMap& fine_vmap, const waypoint
 
 double create_reduction(const lane_planner::vmap::VectorMap& fine_vmap, int index)
 {
+    return 1;
 	const vector_map::DTLane& dtlane = fine_vmap.dtlanes[index];
 
 	if (lane_planner::vmap::is_straight_dtlane(dtlane))
@@ -377,7 +378,7 @@ void create_waypoint(const waypoint_follower::LaneArray& msg)
 	for (const waypoint_follower::lane& l : msg.lanes)
 		cached_waypoint.lanes.push_back(create_new_lane(l, header));
 	if (all_vmap.points.empty() || all_vmap.lanes.empty() || all_vmap.nodes.empty() ||
-	    all_vmap.stoplines.empty() || all_vmap.dtlanes.empty()) {
+	    all_vmap.stoplines.empty()) {
 		traffic_pub.publish(cached_waypoint);
 		return;
 	}
@@ -450,7 +451,7 @@ void create_waypoint(const waypoint_follower::LaneArray& msg)
 void update_values()
 {
 	if (all_vmap.points.empty() || all_vmap.lanes.empty() || all_vmap.nodes.empty() ||
-	    all_vmap.stoplines.empty() || all_vmap.dtlanes.empty())
+	    all_vmap.stoplines.empty())
 		return;
 
 	lane_vmap = lane_planner::vmap::create_lane_vmap(all_vmap, lane_planner::vmap::LNO_ALL);
