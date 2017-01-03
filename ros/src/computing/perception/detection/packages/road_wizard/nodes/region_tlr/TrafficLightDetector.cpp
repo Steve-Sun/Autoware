@@ -214,9 +214,9 @@ static cv::Mat signalDetect_inROI(const cv::Mat& roi,
       double area_lower_limit = (3*sqrt(3)) * pow(estimatedRadius / 3.0, 2) / 4; // the area of inscribed triangle of 1/3 circle
       double area_upper_limit = pow(estimatedRadius, 2) * M_PI;                  // the area of the circle
 
-      if (std::max(bound.width, bound.height) < 2*std::min(bound.width, bound.height) && /* dimension ratio */
-          CIRCLE_LEVEL_THRESHOLD <= circleLevel                                       &&
-          area_lower_limit <= area && area <= area_upper_limit)
+      if (std::max(bound.width, bound.height) < 2*std::min(bound.width, bound.height))// && /* dimension ratio */
+//          CIRCLE_LEVEL_THRESHOLD <= //circleLevel                                       &&
+//          area_lower_limit <= area && area <= area_upper_limit)
         {
           // std::cerr << "circleLevel: " << circleLevel << std::endl;
           rangeColor    = WHITE;
