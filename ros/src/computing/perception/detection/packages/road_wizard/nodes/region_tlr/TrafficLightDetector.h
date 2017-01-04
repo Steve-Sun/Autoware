@@ -17,8 +17,8 @@
 
 const LightState STATE_TRANSITION_MATRIX[4][8] = {
 	/* current RYG: 000, 001, 010, 011, 100, 101, 110, 111 */
-	{ GREEN,     UNDEFINED, YELLOW,    YELLOW, GREEN,     GREEN,     YELLOW, UNDEFINED }, /* pre = GREEN  */
-	{ YELLOW,    RED,       YELLOW,    RED,    UNDEFINED, UNDEFINED, YELLOW, UNDEFINED }, /* pre = YELLOW */
+	{ GREEN,     RED, 		YELLOW,    YELLOW, GREEN,     GREEN,     YELLOW, UNDEFINED }, /* pre = GREEN  */
+	{ YELLOW,    RED,       YELLOW,    RED,    GREEN, UNDEFINED, YELLOW, UNDEFINED }, /* pre = YELLOW */
 	{ RED,       RED,       UNDEFINED, RED,    GREEN,     RED,       GREEN,  UNDEFINED }, /* pre = RED */
 	{ UNDEFINED, RED,       YELLOW,    RED,    GREEN,     RED,       YELLOW, UNDEFINED }  /* pre = UNDEFINED */
 };
