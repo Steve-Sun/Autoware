@@ -258,9 +258,6 @@ waypoint_follower::lane apply_stopline_acceleration(const waypoint_follower::lan
 	if (indexes.empty())
 		return l;
 
-	for (const size_t i : indexes)
-		l = apply_acceleration(l, acceleration, i, behind_cnt + 1, 0);
-
 	std::reverse(l.waypoints.begin(), l.waypoints.end());
 
 	std::vector<size_t> reverse_indexes;
