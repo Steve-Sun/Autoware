@@ -139,7 +139,7 @@ int main(int argc, char **argv)
 	bool pub_marker_latch;
 	n.param<bool>("/waypoint_clicker/pub_marker_latch", pub_marker_latch, true);
 
-	n.param<int>("/waypoint_clicker/waypoint_max", waypoint_max, 10000);
+	n.param<int>("/waypoint_clicker/waypoint_max", waypoint_max, 500000);
 	n.param<double>("/waypoint_clicker/search_radius", search_radius, 10);
 	n.param<double>("/waypoint_clicker/velocity", velocity, 40);
 	n.param<std::string>("/waypoint_clicker/frame_id", frame_id, "map");
