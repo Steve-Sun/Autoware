@@ -86,6 +86,21 @@ waypoint_follower::lane create_new_lane(const waypoint_follower::lane& lane, con
 	return l;
 }
 
+waypoint_follower::lane pad_zeros(const waypoint_follower::lane& lane, size_t start_index, size_t fixed_cnt){
+	waypoint_follower::lane l = lane;
+	if(fixed_cnt == 0){
+		return l;
+	}
+
+	for(size_t i = start_index; i < l.waypoints.size(); i++){
+		if(i - start_index < fixed_cnt){
+			l.waypoints[i].twist.twist.linear.x = 0;
+		}
+	}
+
+	return l;
+}
+
 waypoint_follower::lane apply_acceleration(const waypoint_follower::lane& lane, double acceleration,
 					   size_t start_index, size_t fixed_cnt, double fixed_vel)
 {
@@ -258,6 +273,10 @@ waypoint_follower::lane apply_stopline_acceleration(const waypoint_follower::lan
 	if (indexes.empty())
 		return l;
 
+	for (const size_t i : indexes){
+		l = pad_zeros(l, i, behind_cnt + 1);
+	}
+
 	std::reverse(l.waypoints.begin(), l.waypoints.end());
 
 	std::vector<size_t> reverse_indexes;
@@ -265,8 +284,9 @@ waypoint_follower::lane apply_stopline_acceleration(const waypoint_follower::lan
 		reverse_indexes.push_back(l.waypoints.size() - i - 1);
 	std::reverse(reverse_indexes.begin(), reverse_indexes.end());
 
-	for (const size_t i : reverse_indexes)
+	for (const size_t i : reverse_indexes){
 		l = apply_acceleration(l, acceleration, i, ahead_cnt + 1, 0);
+	}
 
 	std::reverse(l.waypoints.begin(), l.waypoints.end());
 
