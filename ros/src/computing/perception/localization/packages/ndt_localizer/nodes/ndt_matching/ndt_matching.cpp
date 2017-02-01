@@ -39,6 +39,7 @@
 #include <fstream>
 #include <string>
 #include <chrono>
+#include <mutex>
 
 #include <ros/ros.h>
 #include <std_msgs/Float32.h>
@@ -182,10 +183,13 @@ static std_msgs::Float32 ndt_reliability;
 
 static bool _use_openmp = false;
 static bool _get_height = false;
-static bool _use_local_transform = false;
+static bool _use_local_transform = true;
+static bool first_load = true;
 
 static std::ofstream ofs;
 static std::string filename;
+
+std::mutex map_mtx;
 
 // static tf::TransformListener local_transform_listener;
 static tf::StampedTransform local_transform;
@@ -280,9 +284,10 @@ static void param_callback(const runtime_manager::ConfigNdt::ConstPtr& input)
 
 static void map_callback(const sensor_msgs::PointCloud2::ConstPtr& input)
 {
-  if (map_loaded == 0)
+  if (true)
   {
     // Convert the data type(from sensor_msgs to pcl).
+    auto global_start = std::chrono::system_clock::now();
     pcl::fromROSMsg(*input, map);
 
     if (_use_local_transform == true)
@@ -303,15 +308,30 @@ static void map_callback(const sensor_msgs::PointCloud2::ConstPtr& input)
     }
 
     pcl::PointCloud<pcl::PointXYZ>::Ptr map_ptr(new pcl::PointCloud<pcl::PointXYZ>(map));
-    // Setting point cloud to be aligned to.
-    ndt.setInputTarget(map_ptr);
+    pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt_temp;
+
+    ndt_temp.setInputTarget(map_ptr);
 
     // Setting NDT parameters to default values
-    ndt.setMaximumIterations(iter);
-    ndt.setResolution(ndt_res);
-    ndt.setStepSize(step_size);
-    ndt.setTransformationEpsilon(trans_eps);
+    ndt_temp.setMaximumIterations(iter);
+    ndt_temp.setResolution(ndt_res);
+    ndt_temp.setStepSize(step_size);
+    ndt_temp.setTransformationEpsilon(trans_eps);
 
+    ndt_temp.initCompute();
+    map_mtx.lock();
+
+    // Setting point cloud to be aligned to.
+    auto start = std::chrono::system_clock::now();
+    ndt = ndt_temp;
+    map_mtx.unlock();
+    first_load = 0;
+    auto end = std::chrono::system_clock::now();
+    auto time_taken  = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.0;
+    auto global_time = std::chrono::duration_cast<std::chrono::microseconds>(end - global_start).count() / 1000.0;
+
+    std::cout << "Timestamp: " << input->header.stamp << std::endl;
+    std::cout << "New Map Loaded: " << time_taken << " " << global_time << std::endl;
     map_loaded = 1;
   }
 }
@@ -360,6 +380,7 @@ static void gnss_callback(const geometry_msgs::PoseStamped::ConstPtr& input)
 
 static void initialpose_callback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& input)
 {
+  first_load = true;
   tf::TransformListener listener;
   tf::StampedTransform transform;
   try
@@ -446,10 +467,6 @@ static void points_callback(const sensor_msgs::PointCloud2::ConstPtr& input)
         getFitnessScore_end;
     static double align_time, getFitnessScore_time = 0.0;
 
-    // Setting point cloud to be aligned.
-    ndt.setInputSource(filtered_scan_ptr);
-
-    // Guess the initial gross estimation of the transformation
     predict_pose.x = previous_pose.x + offset_x;
     predict_pose.y = previous_pose.y + offset_y;
     predict_pose.z = previous_pose.z + offset_z;
@@ -464,49 +481,29 @@ static void points_callback(const sensor_msgs::PointCloud2::ConstPtr& input)
     Eigen::Matrix4f init_guess = (init_translation * init_rotation_z * init_rotation_y * init_rotation_x) * tf_btol;
 
     pcl::PointCloud<pcl::PointXYZ>::Ptr output_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-#ifdef USE_FAST_PCL
-    if (_use_openmp == true)
-    {
-      align_start = std::chrono::system_clock::now();
-      ndt.omp_align(*output_cloud, init_guess);
-      align_end = std::chrono::system_clock::now();
-    }
-    else
-    {
-#endif
-      align_start = std::chrono::system_clock::now();
-      ndt.align(*output_cloud, init_guess);
-      align_end = std::chrono::system_clock::now();
-#ifdef USE_FAST_PCL
-    }
-#endif
+    align_start = std::chrono::system_clock::now();
+    map_mtx.lock();
+    ndt.setInputSource(filtered_scan_ptr);
+    ndt.align(*output_cloud, init_guess);
+
+    align_end = std::chrono::system_clock::now();
     align_time = std::chrono::duration_cast<std::chrono::microseconds>(align_end - align_start).count() / 1000.0;
 
     t = ndt.getFinalTransformation();  // localizer
     t2 = t * tf_ltob;                  // base_link
 
     iteration = ndt.getFinalNumIteration();
-#ifdef USE_FAST_PCL
-    if (_use_openmp == true)
-    {
-      getFitnessScore_start = std::chrono::system_clock::now();
-      fitness_score = ndt.omp_getFitnessScore();
-      getFitnessScore_end = std::chrono::system_clock::now();
-    }
-    else
-    {
-#endif
-      getFitnessScore_start = std::chrono::system_clock::now();
-      fitness_score = ndt.getFitnessScore();
-      getFitnessScore_end = std::chrono::system_clock::now();
-#ifdef USE_FAST_PCL
-    }
-#endif
+
+    getFitnessScore_start = std::chrono::system_clock::now();
+    fitness_score = 1.0;
+    getFitnessScore_end = std::chrono::system_clock::now();
+
     getFitnessScore_time =
         std::chrono::duration_cast<std::chrono::microseconds>(getFitnessScore_end - getFitnessScore_start).count() /
         1000.0;
 
     trans_probability = ndt.getTransformationProbability();
+    map_mtx.unlock();
 
     tf::Matrix3x3 mat_l;  // localizer
     mat_l.setValue(static_cast<double>(t(0, 0)), static_cast<double>(t(0, 1)), static_cast<double>(t(0, 2)),
@@ -654,18 +651,6 @@ static void points_callback(const sensor_msgs::PointCloud2::ConstPtr& input)
     }
 
     current_q.setRPY(current_pose.roll, current_pose.pitch, current_pose.yaw);
-    // current_pose is published by vel_pose_mux
-    /*
-    current_pose_msg.header.frame_id = "/map";
-    current_pose_msg.header.stamp = current_scan_time;
-    current_pose_msg.pose.position.x = current_pose.x;
-    current_pose_msg.pose.position.y = current_pose.y;
-    current_pose_msg.pose.position.z = current_pose.z;
-    current_pose_msg.pose.orientation.x = current_q.x();
-    current_pose_msg.pose.orientation.y = current_q.y();
-    current_pose_msg.pose.orientation.z = current_q.z();
-    current_pose_msg.pose.orientation.w = current_q.w();
-    */
 
     localizer_q.setRPY(localizer_pose.roll, localizer_pose.pitch, localizer_pose.yaw);
     if (_use_local_transform == true)
@@ -697,14 +682,11 @@ static void points_callback(const sensor_msgs::PointCloud2::ConstPtr& input)
 
     predict_pose_pub.publish(predict_pose_msg);
     ndt_pose_pub.publish(ndt_pose_msg);
-    // current_pose is published by vel_pose_mux
-    //    current_pose_pub.publish(current_pose_msg);
     localizer_pose_pub.publish(localizer_pose_msg);
 
     // Send TF "/base_link" to "/map"
     transform.setOrigin(tf::Vector3(current_pose.x, current_pose.y, current_pose.z));
     transform.setRotation(current_q);
-    //    br.sendTransform(tf::StampedTransform(transform, current_scan_time, "/map", "/base_link"));
     if (_use_local_transform == true)
     {
       br.sendTransform(tf::StampedTransform(local_transform * transform, current_scan_time, "/map", "/base_link"));
@@ -771,24 +753,12 @@ static void points_callback(const sensor_msgs::PointCloud2::ConstPtr& input)
         << "," << angular_velocity << "," << time_ndt_matching.data << "," << align_time << "," << getFitnessScore_time
         << std::endl;
 
-    std::cout << "-----------------------------------------------------------------" << std::endl;
-    std::cout << "Sequence: " << input->header.seq << std::endl;
-    std::cout << "Timestamp: " << input->header.stamp << std::endl;
-    std::cout << "Frame ID: " << input->header.frame_id << std::endl;
-    //		std::cout << "Number of Scan Points: " << scan_ptr->size() << " points." << std::endl;
-    std::cout << "Number of Filtered Scan Points: " << scan_points_num << " points." << std::endl;
-    std::cout << "NDT has converged: " << ndt.hasConverged() << std::endl;
-    std::cout << "Fitness Score: " << fitness_score << std::endl;
-    std::cout << "Transformation Probability: " << ndt.getTransformationProbability() << std::endl;
-    std::cout << "Execution Time: " << exe_time << " ms." << std::endl;
-    std::cout << "Number of Iterations: " << ndt.getFinalNumIteration() << std::endl;
-    std::cout << "NDT Reliability: " << ndt_reliability.data << std::endl;
-    std::cout << "(x,y,z,roll,pitch,yaw): " << std::endl;
-    std::cout << "(" << current_pose.x << ", " << current_pose.y << ", " << current_pose.z << ", " << current_pose.roll
-              << ", " << current_pose.pitch << ", " << current_pose.yaw << ")" << std::endl;
-    std::cout << "Transformation Matrix: " << std::endl;
-    std::cout << t << std::endl;
-    std::cout << "-----------------------------------------------------------------" << std::endl;
+    //std::cout << "-----------------------------------------------------------------" << std::endl;
+    if (align_time > 50.0f) {
+        std::cout << "Timestamp: " << input->header.stamp << std::endl;
+        std::cout << "Align Time: " << align_time << std::endl;
+        std::cout << "Fitness Score: " << fitness_score << " " << iteration << std::endl;
+    }
 
     // Update offset
     if (_offset == "linear")
@@ -943,12 +913,11 @@ int main(int argc, char** argv)
 
   // Subscribers
   ros::Subscriber param_sub = nh.subscribe("config/ndt", 10, param_callback);
-  ros::Subscriber gnss_sub = nh.subscribe("gnss_pose", 10, gnss_callback);
   ros::Subscriber map_sub = nh.subscribe("points_map", 10, map_callback);
   ros::Subscriber initialpose_sub = nh.subscribe("initialpose", 1000, initialpose_callback);
   ros::Subscriber points_sub = nh.subscribe("filtered_points", _queue_size, points_callback);
 
-  ros::spin();
-
+  ros::MultiThreadedSpinner spinner(4);
+  spinner.spin();
   return 0;
 }

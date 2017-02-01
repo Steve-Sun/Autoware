@@ -7,7 +7,7 @@
   <arg name="offset" default="linear" />
   <arg name="use_openmp" default="false" />
   <arg name="get_height" default="false" />
-  <arg name="use_local_transform" default="false" />
+  <arg name="use_local_transform" default="true" />
   <arg name="sync" default="false" />
   
   <node pkg="ndt_localizer" type="ndt_matching" name="ndt_matching" output="screen">

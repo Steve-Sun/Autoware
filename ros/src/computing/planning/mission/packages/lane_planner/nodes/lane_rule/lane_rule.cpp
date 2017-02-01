@@ -86,6 +86,21 @@ waypoint_follower::lane create_new_lane(const waypoint_follower::lane& lane, con
 	return l;
 }
 
+waypoint_follower::lane pad_zeros(const waypoint_follower::lane& lane, size_t start_index, size_t fixed_cnt){
+	waypoint_follower::lane l = lane;
+	if(fixed_cnt == 0){
+		return l;
+	}
+
+	for(size_t i = start_index; i < l.waypoints.size(); i++){
+		if(i - start_index < fixed_cnt){
+			l.waypoints[i].twist.twist.linear.x = 0;
+		}
+	}
+
+	return l;
+}
+
 waypoint_follower::lane apply_acceleration(const waypoint_follower::lane& lane, double acceleration,
 					   size_t start_index, size_t fixed_cnt, double fixed_vel)
 {
@@ -258,8 +273,9 @@ waypoint_follower::lane apply_stopline_acceleration(const waypoint_follower::lan
 	if (indexes.empty())
 		return l;
 
-	for (const size_t i : indexes)
-		l = apply_acceleration(l, acceleration, i, behind_cnt + 1, 0);
+	for (const size_t i : indexes){
+		l = pad_zeros(l, i, behind_cnt + 1);
+	}
 
 	std::reverse(l.waypoints.begin(), l.waypoints.end());
 
@@ -268,8 +284,9 @@ waypoint_follower::lane apply_stopline_acceleration(const waypoint_follower::lan
 		reverse_indexes.push_back(l.waypoints.size() - i - 1);
 	std::reverse(reverse_indexes.begin(), reverse_indexes.end());
 
-	for (const size_t i : reverse_indexes)
+	for (const size_t i : reverse_indexes){
 		l = apply_acceleration(l, acceleration, i, ahead_cnt + 1, 0);
+	}
 
 	std::reverse(l.waypoints.begin(), l.waypoints.end());
 
@@ -294,6 +311,7 @@ bool is_fine_vmap(const lane_planner::vmap::VectorMap& fine_vmap, const waypoint
 
 double create_reduction(const lane_planner::vmap::VectorMap& fine_vmap, int index)
 {
+    return 1;
 	const vector_map::DTLane& dtlane = fine_vmap.dtlanes[index];
 
 	if (lane_planner::vmap::is_straight_dtlane(dtlane))
@@ -377,7 +395,7 @@ void create_waypoint(const waypoint_follower::LaneArray& msg)
 	for (const waypoint_follower::lane& l : msg.lanes)
 		cached_waypoint.lanes.push_back(create_new_lane(l, header));
 	if (all_vmap.points.empty() || all_vmap.lanes.empty() || all_vmap.nodes.empty() ||
-	    all_vmap.stoplines.empty() || all_vmap.dtlanes.empty()) {
+	    all_vmap.stoplines.empty()) {
 		traffic_pub.publish(cached_waypoint);
 		return;
 	}
@@ -450,7 +468,7 @@ void create_waypoint(const waypoint_follower::LaneArray& msg)
 void update_values()
 {
 	if (all_vmap.points.empty() || all_vmap.lanes.empty() || all_vmap.nodes.empty() ||
-	    all_vmap.stoplines.empty() || all_vmap.dtlanes.empty())
+	    all_vmap.stoplines.empty())
 		return;
 
 	lane_vmap = lane_planner::vmap::create_lane_vmap(all_vmap, lane_planner::vmap::LNO_ALL);

@@ -92,7 +92,6 @@ ros::Publisher g_sound_pub;
 ros::Publisher g_safety_waypoint_pub;
 ros::Publisher g_temporal_waypoints_pub;
 ros::Publisher g_crosswalk_points_pub;
-ros::Publisher g_obstacle_pub;
 ros::Publisher linear_viz_publisher;
 
 WayPoints g_path_dk;
@@ -430,8 +429,6 @@ void displayObstacle(const EControl &kind)
   }
   marker.lifetime = ros::Duration(0.1);
   marker.frame_locked = true;
-
-  //g_obstacle_pub.publish(marker);
 }
 
 void displayDetectionRange(const int &crosswalk_id, const int &num, const EControl &kind)
@@ -722,15 +719,6 @@ EControl vscanDetection()
   return KEEP;  // no obstacles
 }
 
-  /*
-void soundPlay()
-{
-  std_msgs::String string;
-  string.data = pedestrian_sound;
-  g_sound_pub.publish(string);
-}
-  */
-
 EControl obstacleDetection()
 {
   static int false_count = 0;
@@ -884,7 +872,6 @@ int main(int argc, char **argv)
   g_temporal_waypoints_pub = nh.advertise<waypoint_follower::lane>("temporal_waypoints", 1000, true);
   ros::Publisher closest_waypoint_pub;
   closest_waypoint_pub = nh.advertise<std_msgs::Int32>("closest_waypoint", 1000);
-  g_obstacle_pub = nh.advertise<visualization_msgs::Marker>("obstacle", 0);
   linear_viz_publisher = nh.advertise<std_msgs::Float32>("obstacle_linear_velocity_viz", 10);
 
   ROS_ERROR_STREAM("Started vel set");

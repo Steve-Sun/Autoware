@@ -374,7 +374,7 @@ Visualization Manager:
       Queue Size: 100
       Value: true
     - Class: rviz/MarkerArray
-      Enabled: true
+      Enabled: false
       Marker Topic: /global_waypoints_mark
       Name: Global Waypoints
       Namespaces:
@@ -382,7 +382,7 @@ Visualization Manager:
         global_lane_waypoint_orientation_marker_1: true
         global_velocity_lane_1: true
       Queue Size: 100
-      Value: true
+      Value: false
     - Buffer length: 100
       Class: jsk_rviz_plugin/Plotter2D
       Enabled: true
