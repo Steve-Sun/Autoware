@@ -65,10 +65,12 @@ bool g_pose_flag = false;
 bool g_path_flag = false;
 bool g_points_flag = false;
 int g_obstacle_waypoint = -1;
+int g_obstacle_waypoint_prev = -1;
 double g_deceleration_search_distance = 30;
 double g_search_distance = 60;
 int g_closest_waypoint = -1;
 double g_current_vel = 0.0;  // (m/s) subscribe estimated_vel
+double g_obstacle_vel = 0.0;
 CrossWalk vmap;
 ObstaclePoints g_obstacle;
 
@@ -91,6 +93,7 @@ ros::Publisher g_safety_waypoint_pub;
 ros::Publisher g_temporal_waypoints_pub;
 ros::Publisher g_crosswalk_points_pub;
 ros::Publisher g_obstacle_pub;
+ros::Publisher linear_viz_publisher;
 
 WayPoints g_path_dk;
 
@@ -270,6 +273,8 @@ void PathVset::changeWaypoints(int stop_waypoint)
   int fill_in_zero = 20;
   double changed_vel;
   double interval = getInterval();
+  double final_vel = 0;
+  double vel = g_path_dk.getCurrentWaypoints().waypoints[stop_waypoint].twist.twist.linear.x;
 
   // change waypoints to decelerate
   for (int num = stop_waypoint; num > g_closest_waypoint - close_waypoint_threshold; num--)
@@ -277,7 +282,7 @@ void PathVset::changeWaypoints(int stop_waypoint)
     if (!checkWaypoint(num, "changeWaypoints"))
       continue;
 
-    changed_vel = sqrt(2.0 * g_decel * (interval * i));  // sqrt(2*a*x)
+    changed_vel = sqrt(2.0 * g_decel * (interval * i) + g_obstacle_vel * g_obstacle_vel);  // sqrt(2*a*x)
 
     waypoint_follower::waypoint initial_waypoint = g_path_dk.getCurrentWaypoints().waypoints[num];
     if (changed_vel > initial_waypoint.twist.twist.linear.x)
@@ -289,15 +294,19 @@ void PathVset::changeWaypoints(int stop_waypoint)
       current_waypoints_.waypoints[num].twist.twist.linear.x = changed_vel;
     }
 
+    if (i == 0) {
+        final_vel = current_waypoints_.waypoints[num].twist.twist.linear.x;
+    }
     i++;
   }
 
+  //ROS_ERROR_STREAM("g_obstacle_vel = " << g_obstacle_vel << " " << vel << " " << final_vel);
   // fill in 0
   for (int j = 1; j < fill_in_zero; j++)
   {
     if (!checkWaypoint(stop_waypoint + j, "changeWaypoints"))
       continue;
-    current_waypoints_.waypoints[stop_waypoint + j].twist.twist.linear.x = 0.0;
+    current_waypoints_.waypoints[stop_waypoint + j].twist.twist.linear.x = final_vel;
   }
 
 
@@ -725,7 +734,9 @@ void soundPlay()
 EControl obstacleDetection()
 {
   static int false_count = 0;
+  static int vel_false_count = 0;
   static EControl prev_detection = KEEP;
+  static double secs = ros::Time::now().toSec();
 
   EControl vscan_result = vscanDetection();
   displayDetectionRange(vmap.getDetectionCrossWalkID(), g_closest_waypoint, vscan_result);
@@ -738,11 +749,14 @@ EControl obstacleDetection()
       prev_detection = vscan_result;
       // SoundPlay();
       false_count = 0;
+      g_obstacle_waypoint_prev = g_obstacle_waypoint;
+      g_obstacle_vel = g_current_vel;
       return vscan_result;
     }
     else
     {  // no obstacle
       prev_detection = KEEP;
+      g_obstacle_waypoint_prev = -1;
       return vscan_result;
     }
   }
@@ -753,6 +767,24 @@ EControl obstacleDetection()
       displayObstacle(vscan_result);
       prev_detection = vscan_result;
       false_count = 0;
+      double n = ros::Time::now().toSec();
+      double obstacle_vel = (g_obstacle_waypoint - g_obstacle_waypoint_prev) / (n - secs);
+      obstacle_vel = obstacle_vel < 0.0 ? 0.0 : obstacle_vel;
+      if (fabs(g_obstacle_vel - obstacle_vel) > 3) { // More that 3m/s change in velocity
+          if (vel_false_count == 3) {
+              // This is the second time or the obstacle velocity was zero
+              vel_false_count = 0;
+              g_obstacle_vel = obstacle_vel;
+          } else {
+              vel_false_count++;
+          }
+      } else {
+          g_obstacle_vel = obstacle_vel;
+          vel_false_count = 0;
+      }
+      ROS_ERROR_STREAM("My speed = " << g_current_vel * 3.6 << " Other speed = " << 3.6 * g_obstacle_vel << " Temp speed = " << 3.6 * obstacle_vel);
+      secs = n;
+      g_obstacle_waypoint_prev = g_obstacle_waypoint;
       return vscan_result;
     }
     else
@@ -763,6 +795,8 @@ EControl obstacleDetection()
       if (false_count >= LOOP_RATE / 2)
       {
         g_obstacle_waypoint = -1;
+        g_obstacle_waypoint_prev = -1;
+        g_obstacle_vel = 0;
         false_count = 0;
         prev_detection = KEEP;
         return vscan_result;
@@ -789,6 +823,9 @@ void changeWaypoint(EControl detection_result)
     g_path_change.avoidSuddenBraking();
     g_path_change.setTemporalWaypoints();
     g_temporal_waypoints_pub.publish(g_path_change.getTemporalWaypoints());
+    std_msgs::Float32 velocity;
+    velocity.data = g_obstacle_vel * 3.6;
+    linear_viz_publisher.publish(velocity);
   }
   else if (detection_result == DECELERATE)
   {  // DECELERATE for obstacles
@@ -848,7 +885,9 @@ int main(int argc, char **argv)
   ros::Publisher closest_waypoint_pub;
   closest_waypoint_pub = nh.advertise<std_msgs::Int32>("closest_waypoint", 1000);
   g_obstacle_pub = nh.advertise<visualization_msgs::Marker>("obstacle", 0);
+  linear_viz_publisher = nh.advertise<std_msgs::Float32>("obstacle_linear_velocity_viz", 10);
 
+  ROS_ERROR_STREAM("Started vel set");
   ros::Rate loop_rate(LOOP_RATE);
   while (ros::ok())
   {
